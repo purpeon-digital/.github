@@ -12,7 +12,7 @@ Welcome to the official GitHub organization for **Purpeon Digital**.
 
 You can browse all public projects here:
 
-👉 https://github.com/purpeon-digital
+👉 [https://github.com/purpeon-digital](https://github.com/orgs/purpeon-digital/repositories)
 
 Our website:
 
