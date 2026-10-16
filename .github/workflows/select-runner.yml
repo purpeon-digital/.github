@@ -11,8 +11,9 @@
 #
 # The check runs on `purpeon-linux` (the org's x64 servers and the laptops), so it uses no
 # GitHub-hosted minutes. It asks GitHub for the org's runners with the read-only "Purpeon Runner
-# Reader" App, whose key is the org secret RUNNER_READER_KEY; the calling repository must be
-# allowed to use that secret. See https://github.com/purpeon-digital/purpeon-runner.
+# Reader" App. The calling repository needs that App's private key as the repository secret
+# RUNNER_READER_KEY: on GitHub Free, organization secrets don't reach private repositories.
+# See https://github.com/purpeon-digital/purpeon-runner.
 name: Select runner
 
 on:
