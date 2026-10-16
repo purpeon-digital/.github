@@ -1,0 +1,71 @@
+# Picks a runner for a job: a free Purpeon laptop when one is online, else a GitHub-hosted runner.
+# GitHub's runs-on can't say "this label, or else that one", so this decides first:
+#
+#   jobs:
+#     pick:
+#       uses: purpeon-digital/.github/.github/workflows/select-runner.yml@v1
+#       secrets: inherit
+#     build:
+#       needs: pick
+#       runs-on: ${{ needs.pick.outputs.runner }}
+#
+# The check runs on `purpeon-linux` (the org's x64 servers and the laptops), so it uses no
+# GitHub-hosted minutes. It asks GitHub for the org's runners with the read-only "Purpeon Runner
+# Reader" App, whose key is the org secret RUNNER_READER_KEY; the calling repository must be
+# allowed to use that secret. See https://github.com/purpeon-digital/purpeon-runner.
+name: Select runner
+
+on:
+  workflow_call:
+    inputs:
+      label:
+        description: The laptop label to look for, e.g. purpeon-laptop or purpeon-8cpu.
+        type: string
+        default: purpeon-laptop
+      fallback:
+        description: The runner to use when no laptop with that label is free.
+        type: string
+        default: ubuntu-latest
+    outputs:
+      runner:
+        description: The label to put in runs-on.
+        value: ${{ jobs.pick.outputs.runner }}
+    secrets:
+      RUNNER_READER_KEY:
+        required: true
+
+permissions: {}
+
+jobs:
+  pick:
+    runs-on: purpeon-linux
+    timeout-minutes: 2
+    outputs:
+      runner: ${{ steps.pick.outputs.runner }}
+    steps:
+      - name: Token for the Purpeon Runner Reader App
+        id: token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: Iv23li9JwnsPLe1b4HW7 # not a secret
+          private-key: ${{ secrets.RUNNER_READER_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Pick a runner
+        id: pick
+        uses: actions/github-script@v9
+        env:
+          LABEL: ${{ inputs.label }}
+          FALLBACK: ${{ inputs.fallback }}
+        with:
+          github-token: ${{ steps.token.outputs.token }}
+          script: |
+            const { LABEL, FALLBACK, RUNNER_NAME } = process.env
+            const runners = await github.paginate('GET /orgs/{org}/actions/runners', { org: context.repo.owner, per_page: 100 })
+            // The runner doing this check counts as free: on a laptop, a fresh one replaces it
+            // within seconds, and that's where the job will run.
+            const free = runners.filter(r =>
+              r.status === 'online' && (!r.busy || r.name === RUNNER_NAME) && r.labels.some(l => l.name === LABEL))
+            const runner = free.length > 0 ? LABEL : FALLBACK
+            core.info(`Free runners with ${LABEL}: ${free.map(r => r.name).join(', ') || 'none'}. Using ${runner}.`)
+            core.setOutput('runner', runner)
