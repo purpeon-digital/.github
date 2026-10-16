@@ -4,7 +4,8 @@
 #   jobs:
 #     pick:
 #       uses: purpeon-digital/.github/.github/workflows/select-runner.yml@v1
-#       secrets: inherit
+#       secrets:
+#         RUNNER_READER_KEY: ${{ secrets.RUNNER_READER_KEY }}   # not `inherit`: only this one
 #     build:
 #       needs: pick
 #       runs-on: ${{ needs.pick.outputs.runner }}
