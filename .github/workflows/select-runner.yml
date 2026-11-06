@@ -10,6 +10,10 @@
 #       needs: pick
 #       runs-on: ${{ needs.pick.outputs.runner }}
 #
+# With `wait`, a busy runner with the label is waited for (up to that many seconds) before falling
+# back: worth it where the fallback is expensive (macos-latest costs about 10x Linux minutes), and
+# where the runner is often busy only briefly, e.g. with a run a newer push is cancelling.
+#
 # The check runs on `purpeon-linux` (the org's x64 servers and the laptops), so it uses no
 # GitHub-hosted minutes. It asks GitHub for the org's runners with the read-only "Purpeon Runner
 # Reader" App. The calling repository needs that App's private key as the repository secret
@@ -28,6 +32,12 @@ on:
         description: The runner to use when no laptop with that label is free.
         type: string
         default: ubuntu-latest
+      wait:
+        description: >-
+          Seconds to wait for a busy runner with the label to become free before falling back
+          (at most 480). 0 falls back at once. Never waits when no runner has the label.
+        type: number
+        default: 0
     outputs:
       runner:
         description: The label to put in runs-on.
@@ -41,7 +51,7 @@ permissions: {}
 jobs:
   pick:
     runs-on: purpeon-linux
-    timeout-minutes: 2
+    timeout-minutes: 10
     outputs:
       runner: ${{ steps.pick.outputs.runner }}
     steps:
@@ -59,15 +69,28 @@ jobs:
         env:
           LABEL: ${{ inputs.label }}
           FALLBACK: ${{ inputs.fallback }}
+          WAIT: ${{ inputs.wait }}
         with:
           github-token: ${{ steps.token.outputs.token }}
           script: |
             const { LABEL, FALLBACK, RUNNER_NAME } = process.env
-            const runners = await github.paginate('GET /orgs/{org}/actions/runners', { org: context.repo.owner, per_page: 100 })
-            // The runner doing this check counts as free: on a laptop, a fresh one replaces it
-            // within seconds, and that's where the job will run.
-            const free = runners.filter(r =>
-              r.status === 'online' && (!r.busy || r.name === RUNNER_NAME) && r.labels.some(l => l.name === LABEL))
+            const wait = Math.min(Math.max(Number(process.env.WAIT) || 0, 0), 480)
+            const deadline = Date.now() + wait * 1000
+            const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+            let free = []
+            for (let attempt = 0; ; attempt++) {
+              const runners = await github.paginate('GET /orgs/{org}/actions/runners', { org: context.repo.owner, per_page: 100 })
+              const labelled = runners.filter(r => r.labels.some(l => l.name === LABEL))
+              // The runner doing this check counts as free: on a laptop, a fresh one replaces it
+              // within seconds, and that's where the job will run.
+              free = labelled.filter(r => r.status === 'online' && (!r.busy || r.name === RUNNER_NAME))
+              // Waiting helps only where a runner with the label is busy. Later checks keep
+              // waiting through the seconds a laptop's finished runner takes to be replaced.
+              const worthWaiting = attempt > 0 || labelled.some(r => r.status === 'online' && r.busy)
+              if (free.length > 0 || !worthWaiting || Date.now() + 10000 > deadline) break
+              if (attempt === 0) core.info(`Runners with ${LABEL} are busy; waiting up to ${wait} s for one.`)
+              await sleep(10000)
+            }
             const runner = free.length > 0 ? LABEL : FALLBACK
             core.info(`Free runners with ${LABEL}: ${free.map(r => r.name).join(', ') || 'none'}. Using ${runner}.`)
             core.setOutput('runner', runner)
