@@ -1,4 +1,4 @@
-# Picks a runner for a job: a free Purpeon laptop when one is online, else a GitHub-hosted runner.
+# Picks a runner for a job: a free Purpeon runner when one is online, else a GitHub-hosted runner.
 # GitHub's runs-on can't say "this label, or else that one", so this decides first:
 #
 #   jobs:
@@ -10,14 +10,23 @@
 #       needs: pick
 #       runs-on: ${{ needs.pick.outputs.runner }}
 #
+# By default it looks for `purpeon-modern-cpu`: a Purpeon Linux VM on a Mac (arm64) or on an x64
+# host whose CPU has AVX2, which GitHub's x64 runners have too. Prebuilt x64 tools often need AVX2
+# (workerd, Next.js's SWC, some Astro builds) and die with SIGILL without it. `label` picks other
+# runners, e.g. `purpeon-macos` (with `fallback: macos-latest`).
+#
+# `purpeon-linux` is every Purpeon Linux VM, also the ones on x64 CPUs without AVX2: only for jobs
+# that were tried there. This check runs on one of them, and counts the runner it runs on as free,
+# so with that label it never falls back: `runs-on: purpeon-linux` says the same without the check.
+#
 # With `wait`, a busy runner with the label is waited for (up to that many seconds) before falling
 # back: worth it where the fallback is expensive (macos-latest costs about 10x Linux minutes), and
 # where the runner is often busy only briefly, e.g. with a run a newer push is cancelling.
 #
-# The check runs on `purpeon-linux` (the org's x64 servers and the laptops), so it uses no
-# GitHub-hosted minutes. It asks GitHub for the org's runners with the read-only "Purpeon Runner
-# Reader" App. The calling repository needs that App's private key as the repository secret
-# RUNNER_READER_KEY: on GitHub Free, organization secrets don't reach private repositories.
+# The check runs on `purpeon-linux` (any Purpeon Linux VM), so it uses no GitHub-hosted minutes. It
+# asks GitHub for the org's runners with the read-only "Purpeon Runner Reader" App. The calling
+# repository needs that App's private key as the repository secret RUNNER_READER_KEY: on GitHub
+# Free, organization secrets don't reach private repositories.
 # See https://github.com/purpeon-digital/purpeon-runner.
 name: Select runner
 
@@ -25,11 +34,11 @@ on:
   workflow_call:
     inputs:
       label:
-        description: The laptop label to look for, e.g. purpeon-laptop or purpeon-8cpu.
+        description: The label to look for, e.g. purpeon-modern-cpu, purpeon-linux or purpeon-8cpu.
         type: string
-        default: purpeon-laptop
+        default: purpeon-modern-cpu
       fallback:
-        description: The runner to use when no laptop with that label is free.
+        description: The runner to use when no runner with that label is free.
         type: string
         default: ubuntu-latest
       wait:
@@ -81,11 +90,11 @@ jobs:
             for (let attempt = 0; ; attempt++) {
               const runners = await github.paginate('GET /orgs/{org}/actions/runners', { org: context.repo.owner, per_page: 100 })
               const labelled = runners.filter(r => r.labels.some(l => l.name === LABEL))
-              // The runner doing this check counts as free: on a laptop, a fresh one replaces it
-              // within seconds, and that's where the job will run.
+              // The runner doing this check counts as free: a fresh one replaces it within a
+              // minute, and that's where the job will run.
               free = labelled.filter(r => r.status === 'online' && (!r.busy || r.name === RUNNER_NAME))
               // Waiting helps only where a runner with the label is busy. Later checks keep
-              // waiting through the seconds a laptop's finished runner takes to be replaced.
+              // waiting through the time a finished runner takes to be replaced.
               const worthWaiting = attempt > 0 || labelled.some(r => r.status === 'online' && r.busy)
               if (free.length > 0 || !worthWaiting || Date.now() + 10000 > deadline) break
               if (attempt === 0) core.info(`Runners with ${LABEL} are busy; waiting up to ${wait} s for one.`)
